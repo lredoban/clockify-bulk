@@ -24,6 +24,7 @@ const config = new Conf({
     authToken: "",
     startHour: 9,
     endHour: 17,
+    lastDescription: "",
   },
 });
 
@@ -80,32 +81,79 @@ async function createTimeEntry(config: ClockifyConfig, date: Date) {
   return response.json();
 }
 
-async function promptForMissingConfig() {
+async function promptForConfig() {
   const responses = await prompts([
     {
-      type: config.get("workspaceId") ? null : "text",
+      type: "text",
       name: "workspaceId",
       message: "Enter your Clockify workspace ID:",
+      initial: config.get("workspaceId") as string,
       validate: (value: string) => !!value || "Workspace ID is required",
     },
     {
-      type: config.get("projectId") ? null : "text",
+      type: "text",
       name: "projectId",
       message: "Enter your Clockify project ID:",
+      initial: config.get("projectId") as string,
       validate: (value: string) => !!value || "Project ID is required",
     },
     {
-      type: config.get("authToken") ? null : "password",
+      type: "password",
       name: "authToken",
       message: "Enter your Clockify auth token:",
+      initial: config.get("authToken") as string,
       validate: (value: string) => !!value || "Auth token is required",
+    },
+    {
+      type: "text",
+      name: "description",
+      message: "Enter time entry description:",
+      initial: config.get("lastDescription") as string,
+      validate: (value: string) => !!value || "Description is required",
+    },
+    {
+      type: "number",
+      name: "startHour",
+      message: "Enter start hour (0-23):",
+      initial: config.get("startHour") as number,
+      validate: (value: number) =>
+        (value >= 0 && value <= 23) || "Hour must be between 0 and 23",
+    },
+    {
+      type: "number",
+      name: "endHour",
+      message: "Enter end hour (0-23):",
+      initial: config.get("endHour") as number,
+      validate: (value: number) =>
+        (value >= 0 && value <= 23) || "Hour must be between 0 and 23",
     },
   ]);
 
+  if (
+    !responses.workspaceId ||
+    !responses.projectId ||
+    !responses.authToken ||
+    !responses.description
+  ) {
+    throw new Error("All fields are required");
+  }
+
   // Save responses to config
-  if (responses.workspaceId) config.set("workspaceId", responses.workspaceId);
-  if (responses.projectId) config.set("projectId", responses.projectId);
-  if (responses.authToken) config.set("authToken", responses.authToken);
+  config.set("workspaceId", responses.workspaceId);
+  config.set("projectId", responses.projectId);
+  config.set("authToken", responses.authToken);
+  config.set("lastDescription", responses.description);
+  config.set("startHour", responses.startHour);
+  config.set("endHour", responses.endHour);
+
+  return {
+    workspaceId: responses.workspaceId,
+    projectId: responses.projectId,
+    authToken: responses.authToken,
+    description: responses.description,
+    startHour: responses.startHour,
+    endHour: responses.endHour,
+  };
 }
 
 const main = defineCommand({
@@ -125,47 +173,12 @@ const main = defineCommand({
       description: "Year",
       default: String(new Date().getFullYear()),
     },
-    description: {
-      type: "string",
-      description: "Time entry description",
-      default: "shiroo",
-    },
-    startHour: {
-      type: "string",
-      description: "Start hour (0-23)",
-      default: String(config.get("startHour")),
-    },
-    endHour: {
-      type: "string",
-      description: "End hour (0-23)",
-      default: String(config.get("endHour")),
-    },
-    "save-hours": {
-      type: "boolean",
-      description: "Save start and end hours as defaults",
-    },
   },
   async run({ args }) {
     consola.start("Starting Clockify bulk time entry");
 
-    // Ensure we have all required config
-    await promptForMissingConfig();
-
-    const clockifyConfig: ClockifyConfig = {
-      workspaceId: config.get("workspaceId") as string,
-      projectId: config.get("projectId") as string,
-      authToken: config.get("authToken") as string,
-      description: args.description,
-      startHour: parseInt(args.startHour),
-      endHour: parseInt(args.endHour),
-    };
-
-    // Save hours if requested
-    if (args["save-hours"]) {
-      config.set("startHour", clockifyConfig.startHour);
-      config.set("endHour", clockifyConfig.endHour);
-      consola.success("Saved working hours as defaults");
-    }
+    // Always prompt for config, but use stored values as defaults
+    const clockifyConfig = await promptForConfig();
 
     const month = parseInt(args.month);
     const year = parseInt(args.year);
