@@ -8,7 +8,8 @@
     "clockify-bulk": "cli.ts"
   },
   "scripts": {
-    "start": "tsx cli.ts"
+    "start": "tsx cli.ts",
+    "simulate": "tsx cli.ts --simulate"
   },
   "dependencies": {
     "citty": "^0.1.5",

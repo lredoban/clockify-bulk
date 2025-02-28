@@ -28,6 +28,12 @@ const config = new Conf({
   },
 });
 
+// Function to get a random lunch break start time (between 11:30 and 13:00)
+function getLunchBreakTime(): number {
+  // Generate a random time between 11.5 (11:30) and 13.0 (13:00)
+  return 11.5 + Math.random() * 1.5;
+}
+
 function getWorkingDays(year: number, month: number) {
   const workingDays: Date[] = [];
   const date = new Date(year, month - 1, 1);
@@ -43,25 +49,91 @@ function getWorkingDays(year: number, month: number) {
   return workingDays;
 }
 
-async function createTimeEntry(config: ClockifyConfig, date: Date) {
-  const start = new Date(date);
-  start.setHours(config.startHour, 0, 0, 0);
+async function createTimeEntry(
+  config: ClockifyConfig,
+  date: Date,
+  simulate: boolean
+) {
+  // Get random lunch break start time (between 11:30 and 13:00)
+  const lunchBreakStart = getLunchBreakTime();
 
-  const end = new Date(date);
-  end.setHours(config.endHour, 0, 0, 0);
+  // Calculate lunch break end time (1 hour later)
+  const lunchBreakEnd = lunchBreakStart + 1;
 
-  const body = {
+  // Morning session
+  const morningStart = new Date(date);
+  morningStart.setHours(config.startHour, 0, 0, 0);
+
+  const morningEnd = new Date(date);
+  // Set the end time to the lunch break start time
+  const lunchStartHour = Math.floor(lunchBreakStart);
+  const lunchStartMinutes = Math.round((lunchBreakStart - lunchStartHour) * 60);
+  morningEnd.setHours(lunchStartHour, lunchStartMinutes, 0, 0);
+
+  // Afternoon session
+  const afternoonStart = new Date(date);
+  const lunchEndHour = Math.floor(lunchBreakEnd);
+  const lunchEndMinutes = Math.round((lunchBreakEnd - lunchEndHour) * 60);
+  afternoonStart.setHours(lunchEndHour, lunchEndMinutes, 0, 0);
+
+  const afternoonEnd = new Date(date);
+  afternoonEnd.setHours(config.endHour, 0, 0, 0);
+
+  // Create morning time entry
+  const morningBody = {
     billable: true,
-    description: config.description,
+    description: "shiroo",
     projectId: config.projectId,
     taskId: null,
     tagIds: null,
     customFields: [],
-    start: start.toISOString(),
-    end: end.toISOString(),
+    start: morningStart.toISOString(),
+    end: morningEnd.toISOString(),
   };
 
-  const response = await fetch(
+  // Create afternoon time entry
+  const afternoonBody = {
+    billable: true,
+    description: "shiroo",
+    projectId: config.projectId,
+    taskId: null,
+    tagIds: null,
+    customFields: [],
+    start: afternoonStart.toISOString(),
+    end: afternoonEnd.toISOString(),
+  };
+
+  if (simulate) {
+    // Format times for display
+    const formatTime = (date: Date) => format(date, "HH:mm");
+
+    consola.info(pc.cyan(`Simulation for ${format(date, "yyyy-MM-dd")}:`));
+    consola.info(
+      `  Morning: ${pc.green(formatTime(morningStart))} - ${pc.green(
+        formatTime(morningEnd)
+      )}`
+    );
+    consola.info(
+      `  Lunch:   ${pc.yellow(formatTime(morningEnd))} - ${pc.yellow(
+        formatTime(afternoonStart)
+      )}`
+    );
+    consola.info(
+      `  Evening: ${pc.green(formatTime(afternoonStart))} - ${pc.green(
+        formatTime(afternoonEnd)
+      )}`
+    );
+    consola.info(`  Description: ${pc.magenta("shiroo")}`);
+    consola.info("");
+
+    return {
+      morning: morningBody,
+      afternoon: afternoonBody,
+    };
+  }
+
+  // Submit morning entry
+  const morningResponse = await fetch(
     `https://eu-central-1.api.clockify.me/workspaces/${config.workspaceId}/timeEntries/full`,
     {
       method: "POST",
@@ -70,15 +142,41 @@ async function createTimeEntry(config: ClockifyConfig, date: Date) {
         "content-type": "application/json",
         "x-auth-token": config.authToken,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(morningBody),
     }
   );
 
-  if (!response.ok) {
-    throw new Error(`Failed to create time entry: ${response.statusText}`);
+  if (!morningResponse.ok) {
+    throw new Error(
+      `Failed to create morning time entry: ${morningResponse.statusText}`
+    );
   }
 
-  return response.json();
+  // Submit afternoon entry
+  const afternoonResponse = await fetch(
+    `https://eu-central-1.api.clockify.me/workspaces/${config.workspaceId}/timeEntries/full`,
+    {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "x-auth-token": config.authToken,
+      },
+      body: JSON.stringify(afternoonBody),
+    }
+  );
+
+  if (!afternoonResponse.ok) {
+    throw new Error(
+      `Failed to create afternoon time entry: ${afternoonResponse.statusText}`
+    );
+  }
+
+  // Return both responses
+  return {
+    morning: await morningResponse.json(),
+    afternoon: await afternoonResponse.json(),
+  };
 }
 
 async function promptForConfig() {
@@ -105,13 +203,6 @@ async function promptForConfig() {
       validate: (value: string) => !!value || "Auth token is required",
     },
     {
-      type: "text",
-      name: "description",
-      message: "Enter time entry description:",
-      initial: config.get("lastDescription") as string,
-      validate: (value: string) => !!value || "Description is required",
-    },
-    {
       type: "number",
       name: "startHour",
       message: "Enter start hour (0-23):",
@@ -129,12 +220,7 @@ async function promptForConfig() {
     },
   ]);
 
-  if (
-    !responses.workspaceId ||
-    !responses.projectId ||
-    !responses.authToken ||
-    !responses.description
-  ) {
+  if (!responses.workspaceId || !responses.projectId || !responses.authToken) {
     throw new Error("All fields are required");
   }
 
@@ -142,7 +228,6 @@ async function promptForConfig() {
   config.set("workspaceId", responses.workspaceId);
   config.set("projectId", responses.projectId);
   config.set("authToken", responses.authToken);
-  config.set("lastDescription", responses.description);
   config.set("startHour", responses.startHour);
   config.set("endHour", responses.endHour);
 
@@ -150,7 +235,7 @@ async function promptForConfig() {
     workspaceId: responses.workspaceId,
     projectId: responses.projectId,
     authToken: responses.authToken,
-    description: responses.description,
+    description: "shiroo",
     startHour: responses.startHour,
     endHour: responses.endHour,
   };
@@ -173,6 +258,11 @@ const main = defineCommand({
       description: "Year",
       default: String(new Date().getFullYear()),
     },
+    simulate: {
+      type: "boolean",
+      description: "Simulate mode - don't actually create entries",
+      default: false,
+    },
   },
   async run({ args }) {
     consola.start("Starting Clockify bulk time entry");
@@ -182,12 +272,19 @@ const main = defineCommand({
 
     const month = parseInt(args.month);
     const year = parseInt(args.year);
+    const simulate = args.simulate;
+
+    if (simulate) {
+      consola.info(pc.yellow("SIMULATION MODE: No entries will be created"));
+    }
 
     consola.info(
-      `Creating entries for ${pc.cyan(
+      `${simulate ? "Simulating" : "Creating"} entries for ${pc.cyan(
         format(new Date(year, month - 1), "MMMM yyyy")
-      )}`
+      )} with description "${pc.green("shiroo")}"`
     );
+
+    consola.info(`Each day will include a random 1-hour lunch break`);
 
     const workingDays = getWorkingDays(year, month);
     consola.info(`Found ${pc.bold(workingDays.length)} working days`);
@@ -197,26 +294,49 @@ const main = defineCommand({
 
     for (const date of workingDays) {
       try {
-        await createTimeEntry(clockifyConfig, date);
+        await createTimeEntry(clockifyConfig, date, simulate);
         success++;
-        consola.info(
-          `✓ Created entry for ${format(date, "yyyy-MM-dd")} (${success}/${
-            workingDays.length
-          })`
-        );
+        if (!simulate) {
+          consola.info(
+            `✓ Created entries for ${format(date, "yyyy-MM-dd")} (${success}/${
+              workingDays.length
+            }) with lunch break`
+          );
+        }
       } catch (error) {
         failed++;
         consola.error(
-          `✗ Failed to create entry for ${format(date, "yyyy-MM-dd")}: ${error}`
+          `✗ Failed to ${simulate ? "simulate" : "create"} entries for ${format(
+            date,
+            "yyyy-MM-dd"
+          )}: ${error}`
         );
       }
     }
 
     if (success > 0) {
-      consola.success(`Successfully created ${pc.green(success)} time entries`);
+      consola.success(
+        `Successfully ${simulate ? "simulated" : "created"} ${pc.green(
+          success
+        )} days of time entries with lunch breaks`
+      );
     }
     if (failed > 0) {
-      consola.error(`Failed to create ${pc.red(failed)} time entries`);
+      consola.error(
+        `Failed to ${simulate ? "simulate" : "create"} ${pc.red(
+          failed
+        )} days of time entries`
+      );
+    }
+
+    if (simulate && success > 0) {
+      consola.info("");
+      consola.info(
+        pc.cyan(
+          "To create these entries for real, run the same command without the --simulate flag:"
+        )
+      );
+      consola.info(pc.green(`npx tsx cli.ts ${args.month} ${args.year}`));
     }
   },
 });
